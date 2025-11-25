@@ -4,7 +4,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'robot_service.dart';
 
 void main() {
-  runApp(MaterialApp(home: RobotControlPage()));
+    runApp(MaterialApp(
+    home: RobotControlPage(),
+    theme: ThemeData.dark(), 
+  ));
 }
 
 class RobotControlPage extends StatefulWidget {
@@ -18,6 +21,8 @@ class _RobotControlPageState extends State<RobotControlPage> {
   // Lista de dispositivos encontrados
   List<BluetoothDiscoveryResult> _devices = [];
   bool _isScanning = false;
+
+  bool _modoBrazo = false; // False = Ruedas, True = Brazo
 
   @override
   void initState() {
@@ -46,88 +51,156 @@ class _RobotControlPageState extends State<RobotControlPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("AURA Control")),
+      appBar: AppBar(
+        title: Text(_robot.isConnected ? "CONECTADO 🟢" : "DESCONECTADO 🔴"),
+        actions: [
+          // Switch para cambiar entre modo Ruedas y Brazo
+          if (_robot.isConnected)
+            Switch(
+              value: _modoBrazo,
+              onChanged: (val) => setState(() => _modoBrazo = val),
+              activeColor: Colors.orange,
+              activeTrackColor: Colors.deepOrange,
+            )
+        ],
+      ),
       body: Column(
         children: [
-          // SECCIÓN 1: CONEXIÓN
+          // SECCIÓN 1: CONEXIÓN (Solo visible si no estamos conectados)
           if (!_robot.isConnected) ...[
-            ElevatedButton(onPressed: _startScan, child: Text(_isScanning ? "Escaneando..." : "Buscar Robot")),
+            ElevatedButton.icon(
+              icon: Icon(Icons.search),
+              label: Text(_isScanning ? "Escaneando..." : "Buscar HC-06"),
+              onPressed: _startScan,
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+            ),
             Expanded(
               child: ListView.builder(
                 itemCount: _devices.length,
                 itemBuilder: (ctx, i) {
                   final dev = _devices[i].device;
                   return ListTile(
-                    title: Text(dev.name ?? "Sin nombre"),
+                    title: Text(dev.name ?? "Desconocido"),
                     subtitle: Text(dev.address),
                     trailing: ElevatedButton(
                       child: Text("Conectar"),
                       onPressed: () async {
-                        bool success = await _robot.connectToDevice(dev.address);
-                        setState(() {}); // Refrescar UI
-                        if (success) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Conectado!")));
+                        bool exito = await _robot.connectToDevice(dev.address);
+                        setState(() {}); 
+                        if (exito) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("¡Conexión establecida!")));
                       },
                     ),
                   );
                 },
               ),
             ),
-          ] else ...[
-            // SECCIÓN 2: CONTROLES (Solo visible si está conectado)
+          ] 
+          // SECCIÓN 2: CONTROLES (Visible al conectar)
+          else ...[
+            // Botón de desconexión rápido
             Container(
-              color: Colors.green[100],
-              padding: EdgeInsets.all(10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text("CONECTADO ✅"),
-                  IconButton(
-                    icon: Icon(Icons.close, color: Colors.red),
-                    onPressed: () { _robot.disconnect(); setState(() {}); },
-                  )
-                ],
-              ),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    SizedBox(height: 20),
-                    Text("--- MOTORES ---", style: TextStyle(fontWeight: FontWeight.bold)),
-                    // Ejemplo de Botón "Adelante"
-                    GestureDetector(
-                      onTapDown: (_) => _robot.setMoveCommand('F'), // Al presionar
-                      onTapUp: (_) => _robot.setMoveCommand('S'),   // Al soltar
-                      child: Container(
-                        width: 100, height: 100,
-                        color: Colors.blue,
-                        child: Icon(Icons.arrow_upward, size: 50, color: Colors.white),
-                      ),
-                    ),
-                    // Aquí agregarías los botones de Izq, Der, Atrás igual que arriba...
-                    
-                    SizedBox(height: 40),
-                    Text("--- BRAZO ---", style: TextStyle(fontWeight: FontWeight.bold)),
-                    // Slider Base (Eje 'a')
-                    Text("Base (Eje A)"),
-                    Slider(
-                      value: 90, 
-                      min: 0, max: 180, 
-                      onChanged: (val) {
-                        // Solo visual, no enviamos nada aun para no saturar
-                      },
-                      onChangeEnd: (val) {
-                        // Enviamos SOLO cuando suelta el slider
-                        _robot.moveArm('a', val.toInt());
-                      },
-                    ),
-                  ],
+              color: Colors.black12,
+              child: ListTile(
+                title: Text("Modo: ${_modoBrazo ? 'BRAZO ROBÓTICO 🦾' : 'VEHÍCULO 🏎️'}"),
+                trailing: IconButton(
+                  icon: Icon(Icons.power_settings_new, color: Colors.red),
+                  onPressed: () { _robot.disconnect(); setState(() {}); },
                 ),
               ),
+            ),
+            
+            Expanded(
+              child: _modoBrazo ? _buildControlesBrazo() : _buildControlesRuedas(),
             ),
           ]
         ],
       ),
+    );
+  }
+
+  // --- PANTALLA DE RUEDAS ---
+  Widget _buildControlesRuedas() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _botonFlecha("ADELANTE", Icons.arrow_upward, 'F'),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _botonFlecha("IZQ", Icons.arrow_back, 'L'),
+              SizedBox(width: 40), // Espacio central
+              _botonFlecha("DER", Icons.arrow_forward, 'R'),
+            ],
+          ),
+          _botonFlecha("ATRÁS", Icons.arrow_downward, 'B'),
+        ],
+      ),
+    );
+  }
+
+  Widget _botonFlecha(String label, IconData icon, String cmd) {
+    return GestureDetector(
+      // AQUÍ ESTÁ LA MAGIA DEL MOVIMIENTO CONTINUO
+      onTapDown: (_) => _robot.setMoveCommand(cmd), // Al presionar: Manda 'F' (y el heartbeat lo repite)
+      onTapUp: (_) => _robot.setMoveCommand('S'),   // Al soltar: Manda 'S' (y el heartbeat repite Stop)
+      onTapCancel: () => _robot.setMoveCommand('S'), // Seguridad extra
+      child: Container(
+        margin: EdgeInsets.all(10),
+        width: 90, height: 90,
+        decoration: BoxDecoration(color: Colors.blueAccent, shape: BoxShape.circle, boxShadow: [BoxShadow(blurRadius: 10, color: Colors.blue.withOpacity(0.5))]),
+        child: Icon(icon, size: 40, color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _buildControlesBrazo() {
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(20),
+      child: Column(
+        children: [
+          Text("PRECAUCIÓN: Movimiento directo de servos"),
+          SizedBox(height: 20),
+          _sliderBrazo("Base (Eje A)", 'a', 0, 180),
+          _sliderBrazo("Hombro (Eje B)", 'b', 0, 180),
+          _sliderBrazo("Codo (Eje C)", 'c', 0, 180),
+          _sliderBrazo("Muñeca V (Eje D)", 'd', 0, 180),
+          _sliderBrazo("Muñeca R (Eje E)", 'e', 0, 180),
+          _sliderBrazo("Gripper (Eje F)", 'f', 0, 180),
+        ],
+      ),
+    );
+  }
+  
+  Widget _sliderBrazo(String nombre, String eje, double min, double max) {
+    // Variable local para visualización (no necesitamos guardarla en estado global)
+    double _valorLocal = 90; 
+    
+    return StatefulBuilder(
+      builder: (context, setStateLocal) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("$nombre: ${_valorLocal.toInt()}°"),
+            Slider(
+              value: _valorLocal,
+              min: min, max: max,
+              divisions: 180,
+              label: _valorLocal.round().toString(),
+              activeColor: Colors.orange,
+              // IMPORTANTE: Solo enviamos el comando al SOLTAR el slider (onChangeEnd)
+              // Si usas onChanged, enviarás 50 comandos por segundo y saturarás el Arduino.
+              onChanged: (val) {
+                setStateLocal(() => _valorLocal = val);
+              },
+              onChangeEnd: (val) {
+                _robot.moveArm(eje, val.toInt());
+                print("Enviando brazo: $eje${val.toInt()}");
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 }
